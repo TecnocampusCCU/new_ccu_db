@@ -8,7 +8,7 @@
                               -------------------
         begin                : 2024-01-19
         git sha              : $Format:%H$
-        copyright            : (C) 2024 by CCU - Miquel Rodríguez
+        copyright            : (C) 2024 by CCU - Miquel Rodríguez Juvany
         email                : miquel.rodriguezj@tecnocampus.cat
  ***************************************************************************/
 
@@ -21,15 +21,50 @@
  *                                                                         *
  ***************************************************************************/
 """
+from qgis import processing
+import psycopg2
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtSql import *
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtWidgets import QAction, QMessageBox, QApplication
+
+from qgis.core import (QgsVectorLayer, QgsProject, QgsDataSourceUri)
+
+import requests
+import zipfile
+from io import BytesIO
+import os
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
 from .new_ccu_db_dialog import NewCCUDBDialog
 import os.path
+
+Versio_modul = "Q3.240131"
+
+create = False
+drop = False
+update = False
+insert = False
+tab = 0
+provincia = ""
+municipi = ""
+parcel = False
+zone = False
+address = False
+building = False
+thoroughfare = False
+cursor = None
+conn = None
+nomBD1 = ""
+password1 = ""
+host1 = ""
+port1 = ""
+user1 = ""
+uri = ""
 
 
 class NewCCUDB:
@@ -59,6 +94,23 @@ class NewCCUDB:
             self.translator.load(locale_path)
             QCoreApplication.installTranslator(self.translator)
 
+        self.dlg = NewCCUDBDialog()
+
+        self.dlg.checkCreate.stateChanged.connect(self.on_change_checkCreate)
+        self.dlg.checkDrop.stateChanged.connect(self.on_change_checkDrop)
+        self.dlg.checkUpdate.stateChanged.connect(self.on_change_checkUpdate)
+        self.dlg.checkInsert.stateChanged.connect(self.on_change_checkInsert)
+        self.dlg.bt_inici.clicked.connect(self.on_click_Inici)
+        self.dlg.bt_sortir.clicked.connect(self.dlg.close)
+        self.dlg.comboProvincia.currentIndexChanged.connect(self.on_change_provincia)
+        self.dlg.comboMunicipi.currentIndexChanged.connect(self.on_change_municipi)
+        self.dlg.checkParcels.stateChanged.connect(self.on_change_checkParcels)
+        self.dlg.checkZones.stateChanged.connect(self.on_change_checkZones)
+        self.dlg.checkAddresses.stateChanged.connect(self.on_change_checkAddresses)
+        self.dlg.checkBuildings.stateChanged.connect(self.on_change_checkBuildings)
+        self.dlg.checkThoroughfares.stateChanged.connect(self.on_change_checkThoroughfares)
+        self.dlg.comboBD.currentIndexChanged.connect(self.on_change_ComboConn)
+
         # Declare instance attributes
         self.actions = []
         self.menu = self.tr(u'&New CCU DB')
@@ -82,57 +134,7 @@ class NewCCUDB:
         # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
         return QCoreApplication.translate('NewCCUDB', message)
 
-
-    def add_action(
-        self,
-        icon_path,
-        text,
-        callback,
-        enabled_flag=True,
-        add_to_menu=True,
-        add_to_toolbar=True,
-        status_tip=None,
-        whats_this=None,
-        parent=None):
-        """Add a toolbar icon to the toolbar.
-
-        :param icon_path: Path to the icon for this action. Can be a resource
-            path (e.g. ':/plugins/foo/bar.png') or a normal file system path.
-        :type icon_path: str
-
-        :param text: Text that should be shown in menu items for this action.
-        :type text: str
-
-        :param callback: Function to be called when the action is triggered.
-        :type callback: function
-
-        :param enabled_flag: A flag indicating if the action should be enabled
-            by default. Defaults to True.
-        :type enabled_flag: bool
-
-        :param add_to_menu: Flag indicating whether the action should also
-            be added to the menu. Defaults to True.
-        :type add_to_menu: bool
-
-        :param add_to_toolbar: Flag indicating whether the action should also
-            be added to the toolbar. Defaults to True.
-        :type add_to_toolbar: bool
-
-        :param status_tip: Optional text to show in a popup when mouse pointer
-            hovers over the action.
-        :type status_tip: str
-
-        :param parent: Parent widget for the new action. Defaults None.
-        :type parent: QWidget
-
-        :param whats_this: Optional text to show in the status bar when the
-            mouse pointer hovers over the action.
-
-        :returns: The action that was created. Note that the action is also
-            added to self.actions list.
-        :rtype: QAction
-        """
-
+    def add_action(self, icon_path, text, callback, enabled_flag=True, add_to_menu=True, add_to_toolbar=True, status_tip=None, whats_this=None, parent=None):
         icon = QIcon(icon_path)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
@@ -158,18 +160,571 @@ class NewCCUDB:
         return action
 
     def initGui(self):
-        """Create the menu entries and toolbar icons inside the QGIS GUI."""
-
         icon_path = ':/plugins/new_ccu_db/icon.png'
         self.add_action(
             icon_path,
             text=self.tr(u'Plugin per a la nova creació de la base de dades del CCU'),
             callback=self.run,
             parent=self.iface.mainWindow())
-
-        # will be set False in run()
         self.first_start = True
 
+    def on_change_checkCreate(self):
+        global create
+        if (self.dlg.checkCreate.isChecked()):
+            create = True
+        else:
+            create = False
+    
+    def on_change_checkDrop(self):
+        global drop
+        if (self.dlg.checkDrop.isChecked()):
+            drop = True
+        else:
+            drop = False
+
+    def on_change_checkUpdate(self):
+        global update
+        if (self.dlg.checkUpdate.isChecked()):
+            update = True
+        else:
+            update = False
+
+    def on_change_checkInsert(self):
+        global insert
+        if (self.dlg.checkInsert.isChecked()):
+            insert = True
+        else:
+            insert = False
+
+    def on_change_checkParcels(self):
+        global parcel
+        if (self.dlg.checkParcels.isChecked()):
+            parcel = True
+        else:
+            parcel = False
+
+    def on_change_checkZones(self):
+        global zone
+        if (self.dlg.checkZones.isChecked()):
+            zone = True
+        else:
+            zone = False
+
+    def on_change_checkAddresses(self):
+        global address
+        if (self.dlg.checkAddresses.isChecked()):
+            address = True
+        else:
+            address = False
+
+    def on_change_checkBuildings(self):
+        global building
+        if (self.dlg.checkBuildings.isChecked()):
+            building = True
+        else:
+            building = False
+
+    def on_change_checkThoroughfares(self):
+        global thoroughfare
+        if (self.dlg.checkThoroughfares.isChecked()):
+            thoroughfare = True
+        else:
+            thoroughfare = False
+
+    def on_change_provincia(self):
+        global provincia
+        provincia = self.dlg.comboProvincia.currentText()
+
+    def on_change_municipi(self):
+        global municipi
+        municipi = self.dlg.comboMunicipi.currentText()
+    
+    def populateComboBox(self, combo, list, predef, sort):
+        """Procediment per omplir el combo especificat amb la llista subministrada"""
+        combo.blockSignals(True)
+        combo.clear()
+        model = QStandardItemModel(combo)
+        predefInList = None
+        for elem in list:
+            try:
+                item = QStandardItem(str(elem))
+            except TypeError:
+                item = QStandardItem(str(elem))
+            model.appendRow(item)
+            if elem == predef:
+                predefInList = elem
+        if sort:
+            model.sort(0)
+        combo.setModel(model)
+        if predef != "":
+            if predefInList:
+                combo.setCurrentIndex(combo.findText(predefInList))
+            else:
+                combo.insertItem(0, predef)
+                combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+    
+    def estatInicial(self):
+        global Versio_modul
+        self.dlg.versio.setText(Versio_modul)
+        self.dlg.checkCreate.setChecked(False)
+        self.dlg.checkDrop.setChecked(False)
+        self.dlg.checkUpdate.setChecked(False)
+        self.dlg.checkInsert.setChecked(False)
+        self.dlg.progressBar.setValue(0)
+        self.provincies()
+        self.municipis()
+
+    def provincies(self):
+        self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
+    
+    def municipis(self):
+        self.populateComboBox(self.dlg.comboMunicipi, 
+                         ["08120 - MATARO", "08186 - SABADELL", "08279 - TERRASSA"],
+                         "Selecciona un municipi", True)
+    
+    def definir_url(self, tipus):
+        global provincia
+        global municipi
+
+        CODI_PROVINCIA = provincia.split(" - ")[0]
+        CODI_MUNICIPI = municipi.split(" - ")[0]
+        NOM_MUNICIPI = municipi.split(" - ")[1]
+
+        if tipus == "parcel":
+            url = f"http://www.catastro.minhap.es/INSPIRE/CadastralParcels/{CODI_PROVINCIA}/{CODI_MUNICIPI}-{NOM_MUNICIPI}/A.ES.SDGC.CP.{CODI_MUNICIPI}.zip"
+        if tipus == "zone":
+            url = f"http://www.catastro.minhap.es/INSPIRE/CadastralParcels/{CODI_PROVINCIA}/{CODI_MUNICIPI}-{NOM_MUNICIPI}/A.ES.SDGC.CP.{CODI_MUNICIPI}.zip"
+        if tipus == "address":
+            url = f"http://www.catastro.minhap.es/INSPIRE/Addresses/{CODI_PROVINCIA}/{CODI_MUNICIPI}-{NOM_MUNICIPI}/A.ES.SDGC.AD.{CODI_MUNICIPI}.zip"
+        if tipus == "building":
+            url = f"http://www.catastro.minhap.es/INSPIRE/Buildings/{CODI_PROVINCIA}/{CODI_MUNICIPI}-{NOM_MUNICIPI}/A.ES.SDGC.BU.{CODI_MUNICIPI}.zip"
+        if tipus == "thoroughfare":
+            url = f"http://www.catastro.minhap.es/INSPIRE/Addresses/{CODI_PROVINCIA}/{CODI_MUNICIPI}-{NOM_MUNICIPI}/A.ES.SDGC.AD.{CODI_MUNICIPI}.zip"        
+
+        # EXEMPLE_URL_PARCELS = "http://www.catastro.minhap.es/INSPIRE/CadastralParcels/08/08120-MATARO/A.ES.SDGC.CP.08120.zip"
+        # EXEMPLE_URL_ZONES = "http://www.catastro.minhap.es/INSPIRE/CadastralParcels/08/08120-MATARO/A.ES.SDGC.CP.08120.zip"
+        # EXEMPLE_URL_ADDRESS = "http://www.catastro.minhap.es/INSPIRE/Addresses/08/08120-MATARO/A.ES.SDGC.AD.08120.zip"
+        # EXEMPLE_URL_BUILDINGS = "http://www.catastro.minhap.es/INSPIRE/Buildings/08/08120-MATARO/A.ES.SDGC.BU.08120.zip"
+        # EXEMPLE_URL_THOROUGHFARE = "http://www.catastro.minhap.es/INSPIRE/Addresses/08/08120-MATARO/A.ES.SDGC.AD.08120.zip"
+        return url
+
+    def descarregar_fitxer(self, url):
+        response = requests.get(url, verify=False)
+
+        if response.status_code == 200:
+
+            extracted_dir = os.path.join(self.plugin_dir, "extracted_files")
+            os.makedirs(extracted_dir, exist_ok=True)
+
+            
+            zip_file = zipfile.ZipFile(BytesIO(response.content))
+
+            zip_file.extractall(extracted_dir)
+
+            extracted_files = zip_file.namelist()
+
+            print("Archivos descomprimidos: " )
+            for file in extracted_files:
+                print(file)
+            print(" en la carpeta: " + extracted_dir)
+
+            zip_file.close()
+        else:
+            print(f"Error al descargar el archivo. Código de estado: {response.status_code}")
+
+    def carregar_mapa(self):
+        directory = os.path.join(self.plugin_dir, "extracted_files")
+        group_name = municipi
+        project = QgsProject.instance()
+        tree_root = project.layerTreeRoot()
+        layers_group = tree_root.addGroup(group_name)
+        for gmlfile in os.listdir(directory):
+            if gmlfile.endswith(".gml"):
+                layer_path = os.path.join(directory, gmlfile)
+                file_name = os.path.splitext(gmlfile)[0]
+                if "AD" in gmlfile:
+                    if address == True:
+                        address_path = layer_path + "|layername=Address"
+                        address_file_name = file_name + "_Address"
+                        gml_layer = QgsVectorLayer(address_path, address_file_name, "ogr")
+                        project.addMapLayer(gml_layer, False)
+                        layers_group.addLayer(gml_layer)
+                        print("Capa address o thoroughfarename cargada: " + file_name)
+                    if thoroughfare == True:
+                        thoroughfare_path = layer_path + "|layername=ThoroughfareName"
+                        thoroughfare_file_name = file_name + "_ThoroughfareName"
+                        gml_layer = QgsVectorLayer(thoroughfare_path, thoroughfare_file_name, "ogr")
+                        project.addMapLayer(gml_layer, False)
+                        layers_group.addLayer(gml_layer)
+                        print("Capa address o thoroughfarename cargada: " + file_name)
+                else:
+                    gml_layer = QgsVectorLayer(layer_path, file_name, "ogr")
+                    project.addMapLayer(gml_layer, False)
+                    layers_group.addLayer(gml_layer)
+                    print("Capa cargada: " + file_name)
+        
+        print("Totes les capes carregades")
+
+    def create_table(self, tabla_postgresql):
+        if tabla_postgresql == "parcel":
+            sql = """
+            DROP TABLE IF EXISTS parcel CASCADE;
+            CREATE TABLE parcel (
+                id_parcel SERIAL PRIMARY KEY NOT NULL,
+                geom geometry,
+                cadastral_reference VARCHAR,
+                area_value FLOAT
+            );
+            """
+            cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "zone":
+            sql = """
+            DROP TABLE IF EXISTS zone CASCADE;
+            CREATE TABLE zone (
+                id_zone SERIAL PRIMARY KEY NOT NULL,
+                geom geometry,
+                cadastral_zoning_reference VARCHAR,
+                type VARCHAR,
+                local_reference VARCHAR
+            );
+            """
+            cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "address":
+            sql = """
+            DROP TABLE IF EXISTS address CASCADE;
+            CREATE TABLE address (
+                id_address SERIAL PRIMARY KEY NOT NULL,
+                geom geometry,
+                cadastral_reference VARCHAR,
+                designator VARCHAR,
+                local_designator VARCHAR
+            );
+            """
+            cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "building":
+            sql = """
+            DROP TABLE IF EXISTS building CASCADE;
+            CREATE TABLE building (
+                id_building SERIAL PRIMARY KEY NOT NULL,
+                geom geometry,
+                cadastral_reference VARCHAR,
+                current_use VARCHAR,
+                area_value FLOAT,
+                number_of_floors_above_ground INTEGER,
+                date_of_construction DATE,
+                date_of_last_update DATE
+            );
+            """
+            cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "thoroughfare":
+            sql = """
+            DROP TABLE IF EXISTS thoroughfare CASCADE;
+            CREATE TABLE thoroughfare (
+                id SERIAL PRIMARY KEY NOT NULL,
+                type VARCHAR,
+                name VARCHAR
+            );
+            """
+            cursor.execute(sql)
+            conn.commit()
+
+    def insertar_dades(self, layer, tabla_postgresql):
+        if tabla_postgresql == "parcel":
+            alg_params = {
+                'FIELD' : ['nationalCadastralReference'], 
+                'INPUT' : layer, 
+                'OUTPUT' : 'TEMPORARY_OUTPUT', 
+                'SEPARATE_DISJOINT' : False 
+            }
+            result = processing.run('native:dissolve', alg_params)
+            layer = result['OUTPUT']
+
+            for feature in layer.getFeatures():
+                geom = feature.geometry().asWkt()
+                cadastral_reference = feature["nationalCadastralReference"]
+                area_value = feature["areaValue"]
+
+                sql = f"INSERT INTO parcel (geom, cadastral_reference, area_value) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', {area_value})"
+                cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "zone":
+            alg_params = {
+                'INPUT' : layer, 
+                'METHOD' : 1, 
+                'OUTPUT' : 'TEMPORARY_OUTPUT'
+            }
+            result = processing.run('native:fixgeometries', alg_params)
+            layer = result['OUTPUT']
+            alg_params = {
+                "FIELD": ["nationalCadastalZoningReference"],
+                "INPUT": layer,
+                "OUTPUT": "TEMPORARY_OUTPUT",
+                "SEPARATE_DISJOINT": False
+            }
+            result = processing.run("native:dissolve", alg_params)
+            layer = result["OUTPUT"]
+
+            for feature in layer.getFeatures():
+                geom = feature.geometry().asWkt()
+                cadastral_zoning_reference = feature["nationalCadastalZoningReference"]
+                type = feature["localisedCharacterString"]
+
+                sql = f"INSERT INTO zone (geom, cadastral_zoning_reference, type) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_zoning_reference}', '{type}')"
+                cursor.execute(sql)
+            conn.commit()
+        if tabla_postgresql == "address":
+            for feature in layer.getFeatures():
+                geom = feature.geometry().asWkt()
+                cadastral_reference = feature["localId"].split(".")[-1]
+                street = feature["localId"].split(".")[2].zfill(5)
+                if feature["localId"].split(".")[3].isnumeric():
+                    number = feature["localId"].split(".")[3].zfill(3)
+                else:
+                    number = feature["localId"].split(".")[3].zfill(4)
+                designator = str(street) + str(number)
+                if len(designator) == 8:
+                    designator = designator + "x"
+
+                sql = f"INSERT INTO address (geom, cadastral_reference, designator) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', '{designator}')"
+                cursor.execute(sql)
+                QApplication.processEvents()
+            conn.commit()
+        if tabla_postgresql == "building":
+            for feature in layer.getFeatures():
+                if feature["conditionOfConstruction"] != "-":
+                    geom = feature.geometry().asWkt()
+                    cadastral_reference = feature["localId"]
+                    current_use = feature["currentUse"]
+                    area_value = feature["value"]
+                    number_of_floors_above_ground = feature["numberOfFloorsAboveGround"]
+                    date_of_construction = feature["beginning"]
+                    date_of_last_update = feature["end"]
+
+                    sql = f"INSERT INTO building (geom, cadastral_reference, current_use, area_value, number_of_floors_above_ground, date_of_construction, date_of_last_update) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', '{current_use}', {area_value}, {number_of_floors_above_ground}, '{date_of_construction}', '{date_of_last_update}')"
+                    cursor.execute(sql)
+                conn.commit()
+        if tabla_postgresql == "thoroughfare":
+            for feature in layer.getFeatures():
+                text = feature["text"]
+                #type = text.split(" ")[0]
+                #name = text.split(" ")[1]
+                type = self.left(text, 2)
+                name = self.mid(text, 3).replace("'", "''")
+
+                sql = f"INSERT INTO thoroughfare (type, name) VALUES ('{type}', '{name}')"
+                cursor.execute(sql)
+            conn.commit()
+    
+    def left(self, s, amount):
+        return s[:amount]
+    
+    def right(self, s, amount):
+        return s[-amount:]
+    
+    def mid(self, s, amount):
+        return s[amount:]
+    
+    #def mid(self, s, amount, offset):
+    #    return s[offset:offset+amount]
+
+    def on_change_ComboConn(self):
+        global nomBD1
+        global password1
+        global host1
+        global port1
+        global user1
+        global cursor
+        global conn
+        global uri
+        s = QSettings()
+        select = 'Selecciona connexió'
+        nom_conn = self.dlg.comboBD.currentText()
+
+        if nom_conn != select:
+            s.beginGroup("PostgreSQL/connections/"+nom_conn)
+            currentKeys = s.childKeys()
+
+            nomBD1 = s.value("database", "")
+            password1 = s.value("password", "")
+            host1 = s.value("host", "")
+            port1 = s.value("port", "")
+            user1 = s.value("username", "")
+            #schema1 = s.value("schema", "")
+            QApplication.processEvents()
+
+            # Connexio
+            nomBD = nomBD1.encode('ascii', 'ignore')
+            user = user1.encode('ascii', 'ignore')
+            server = host1.encode('ascii', 'ignore')
+            password = password1.encode('ascii', 'ignore')
+            #schema = schema1.encode('ascii', 'ignore')
+            try:
+                estructura = "dbname='"+ nomBD.decode("utf-8") + "' user='" + user.decode("utf-8") +"' host='" + server.decode("utf-8") +"' password='" + password.decode("utf-8") + "'" # + "'schema='" + schema.decode("utf-8") + "'"
+                conn = psycopg2.connect(estructura)
+                cursor = conn.cursor()
+                uri = QgsDataSourceUri()
+                uri.setConnection(host1, port1, nomBD1, user1, password1)
+                #schema1 = "public"
+            except Exception as ex:
+                self.estatInicial()
+                print ("I am unable to connect to the database")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error canvi connexió")
+                if conn is not None:
+                    conn.rollback()
+                return
+    
+    
+    def getConnections(self):
+        '''Aquesta funció retorna les connexions que estan guardades en el projecte.'''
+        s = QSettings()
+        s.beginGroup("PostgreSQL/connections")
+        currentConnections = s.childGroups()
+        s.endGroup()
+        return currentConnections
+    
+    def on_click_Inici(self):
+        global provincia
+        global municipi
+        global parcel
+        global zone
+        global address
+        global building
+        global thoroughfare
+        
+        global conn
+        global cursor
+        global uri
+        global host1
+        global port1
+        global nomBD1
+        global user1
+        global password1
+
+        uri = QgsDataSourceUri()
+        try:
+            uri.setConnection(host1, port1, nomBD1, user1, password1)
+        except Exception as ex:
+            print ("Error a la connexio")
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            message = template.format(type(ex).__name__, ex.args)
+            print (message)
+            QMessageBox.critical(None, "Error", "Error a la connexio")
+            conn.rollback()
+            self.dlg.setEnabled(True)
+            return
+        
+        if (provincia == "" or municipi == "" or provincia == "Selecciona una provincia..." or municipi == "Selecciona un municipi..."):
+            print("Selecciona una província i un municipi")
+            print("provincia: " + provincia)
+            print("municipi: " + municipi)
+            QMessageBox.warning(None, "Error", "Selecciona una província i un municipi")
+            self.dlg.setEnabled(True)
+            return
+        if (parcel == False and zone == False and address == False and building == False and thoroughfare == False):
+            print("Selecciona una entitat")
+            QMessageBox.warning(None, "Error", "Selecciona una entitat")
+            self.dlg.setEnabled(True)
+            return
+
+        self.dlg.setEnabled(False)
+        
+        self.dlg.progressBar.setValue(5)
+
+        QApplication.processEvents()
+
+        if (parcel == True):
+            url = self.definir_url("parcel")
+            self.descarregar_fitxer(url)
+            self.dlg.progressBar.setValue(10)
+            QApplication.processEvents()
+        if (zone == True):
+            url = self.definir_url("zone")
+            self.descarregar_fitxer(url)
+            self.dlg.progressBar.setValue(15)
+            QApplication.processEvents()
+        if (address == True):
+            url = self.definir_url("address")
+            self.descarregar_fitxer(url)
+            self.dlg.progressBar.setValue(20)
+            QApplication.processEvents()
+        if (building == True):
+            url = self.definir_url("building")
+            self.descarregar_fitxer(url)
+            self.dlg.progressBar.setValue(25)
+            QApplication.processEvents()
+        if (thoroughfare == True):
+            url = self.definir_url("thoroughfare")
+            self.descarregar_fitxer(url)
+            self.dlg.progressBar.setValue(30)
+            QApplication.processEvents()
+
+        self.carregar_mapa()
+        self.dlg.progressBar.setValue(50)
+        QApplication.processEvents()
+
+        if parcel == True:
+            if create == True:
+                self.create_table("parcel")
+                self.dlg.progressBar.setValue(55)
+                QApplication.processEvents()
+            if insert == True:
+                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.CP.08120.cadastralparcel")[0]
+                self.insertar_dades(layer, "parcel")
+                self.dlg.progressBar.setValue(60)
+                QApplication.processEvents()
+        if zone == True:
+            if create == True:
+                self.create_table("zone")
+                self.dlg.progressBar.setValue(65)
+                QApplication.processEvents()
+            if insert == True:
+                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.CP.08120.cadastralzoning")[0]
+                self.insertar_dades(layer, "zone")
+                self.dlg.progressBar.setValue(70)
+                QApplication.processEvents()
+        if address == True:
+            if create == True:
+                self.create_table("address")
+                self.dlg.progressBar.setValue(75)
+                QApplication.processEvents()
+            if insert == True:
+                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.AD.08120_Address")[0]
+                self.insertar_dades(layer, "address")
+                self.dlg.progressBar.setValue(80)
+                QApplication.processEvents()
+        if building == True:
+            if create == True:
+                self.create_table("building")
+                self.dlg.progressBar.setValue(85)
+                QApplication.processEvents()
+            if insert == True:
+                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.BU.08120.building")[0]
+                self.insertar_dades(layer, "building")
+                self.dlg.progressBar.setValue(90)
+                QApplication.processEvents()
+        if thoroughfare == True:
+            if create == True:
+                self.create_table("thoroughfare")
+                self.dlg.progressBar.setValue(95)
+                QApplication.processEvents()
+            if insert == True:
+                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.AD.08120_ThoroughfareName")[0]
+                self.insertar_dades(layer, "thoroughfare")
+                self.dlg.progressBar.setValue(100)
+                QApplication.processEvents()
+
+        self.dlg.progressBar.setValue(100)
+        QApplication.processEvents()
+
+        self.dlg.setEnabled(True)
 
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
@@ -179,22 +734,16 @@ class NewCCUDB:
                 action)
             self.iface.removeToolBarIcon(action)
 
-
     def run(self):
         """Run method that performs all the real work"""
-
-        # Create the dialog with elements (after translation) and keep reference
-        # Only create GUI ONCE in callback, so that it will only load when the plugin is started
-        if self.first_start == True:
-            self.first_start = False
-            self.dlg = NewCCUDBDialog()
-
-        # show the dialog
+        self.estatInicial()
         self.dlg.show()
-        # Run the dialog event loop
+        conn = self.getConnections()
+        self.populateComboBox(self.dlg.comboBD, conn, "Selecciona connexió", True)
+        self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
+        self.populateComboBox(self.dlg.comboMunicipi, 
+                         ["08120 - MATARO", "08186 - SABADELL", "08279 - TERRASSA"],
+                         "Selecciona un municipi", True)
         result = self.dlg.exec_()
-        # See if OK was pressed
         if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
             pass
