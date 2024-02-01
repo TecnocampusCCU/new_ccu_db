@@ -21,8 +21,10 @@
  *                                                                         *
  ***************************************************************************/
 """
+
 from qgis import processing
 import psycopg2
+from PyQt5 import QtNetwork
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtSql import *
@@ -36,6 +38,7 @@ import requests
 import zipfile
 from io import BytesIO
 import os
+import json
 
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -43,7 +46,7 @@ from .resources import *
 from .new_ccu_db_dialog import NewCCUDBDialog
 import os.path
 
-Versio_modul = "Q3.240131"
+Versio_modul = "Q3.240201"
 
 create = False
 drop = False
@@ -272,8 +275,8 @@ class NewCCUDB:
         self.dlg.checkUpdate.setChecked(False)
         self.dlg.checkInsert.setChecked(False)
         self.dlg.progressBar.setValue(0)
-        self.provincies()
-        self.municipis()
+        #self.provincies()
+        #self.municipis()
 
     def provincies(self):
         self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
@@ -372,7 +375,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS parcel CASCADE;
             CREATE TABLE parcel (
                 id_parcel SERIAL PRIMARY KEY NOT NULL,
-                geom geometry,
+                geom geometry(Polygon, 25831),
                 cadastral_reference VARCHAR,
                 area_value FLOAT
             );
@@ -384,7 +387,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS zone CASCADE;
             CREATE TABLE zone (
                 id_zone SERIAL PRIMARY KEY NOT NULL,
-                geom geometry,
+                geom geometry(MultiPolygon, 25831),
                 cadastral_zoning_reference VARCHAR,
                 type VARCHAR,
                 local_reference VARCHAR
@@ -427,7 +430,8 @@ class NewCCUDB:
             CREATE TABLE thoroughfare (
                 id SERIAL PRIMARY KEY NOT NULL,
                 type VARCHAR,
-                name VARCHAR
+                name VARCHAR,
+                code VARCHAR
             );
             """
             cursor.execute(sql)
@@ -511,12 +515,11 @@ class NewCCUDB:
         if tabla_postgresql == "thoroughfare":
             for feature in layer.getFeatures():
                 text = feature["text"]
-                #type = text.split(" ")[0]
-                #name = text.split(" ")[1]
                 type = self.left(text, 2)
                 name = self.mid(text, 3).replace("'", "''")
+                code = feature["alternativeIdentifier"]
 
-                sql = f"INSERT INTO thoroughfare (type, name) VALUES ('{type}', '{name}')"
+                sql = f"INSERT INTO thoroughfare (type, name, code) VALUES ('{type}', '{name}', '{code}')"
                 cursor.execute(sql)
             conn.commit()
     
@@ -590,6 +593,72 @@ class NewCCUDB:
         s.endGroup()
         return currentConnections
     
+    def obtener_provincias(self):
+
+        self.manager_provincias = QtNetwork.QNetworkAccessManager()
+        self.manager_provincias.finished.connect(self.rellenar_provincias)
+
+        url = 'http://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejero.svc/json/ObtenerProvincias'
+
+        req = QtNetwork.QNetworkRequest(QUrl(url))
+        self.manager_provincias.get(req)
+
+    def rellenar_provincias(self, reply):
+        er = reply.error()
+        if er == QtNetwork.QNetworkReply.NetworkError.NoError:
+            bytes_string = reply.readAll()
+            response = str(bytes_string, 'utf-8')
+            response_json = json.loads(response)
+            provincias = response_json['consulta_provincieroResult']['provinciero']['prov']
+
+            list_provincias = [self.tr('Select a province...')]
+
+            for provincia in provincias:
+                list_provincias.append('{} - {}'.format(provincia['cpine'], provincia['np']))
+
+            self.dlg.comboProvincia.addItems(list_provincias)
+            self.dlg.comboProvincia.currentIndexChanged.connect(self.obtener_municipos)
+
+    def obtener_municipos(self):
+
+        try:
+            self.manager_municipios = QtNetwork.QNetworkAccessManager()
+            self.manager_municipios.finished.connect(self.rellenar_municipios)
+            provincia_cod = self.dlg.comboProvincia.currentText()
+            msg = f'03.1 Obteniendo municipios (obtener_municipios) de la provincia {provincia_cod}'
+            provincia = provincia_cod.split(' - ')[0]
+
+            url = 'http://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCallejeroCodigos.svc/json/ObtenerMunicipiosCodigos?CodigoProvincia=' + str(
+                provincia)
+
+            req = QtNetwork.QNetworkRequest(QUrl(url))
+            self.manager_municipios.get(req)
+        except Exception as e:
+            print(e)
+
+    def rellenar_municipios(self, reply):
+
+        er = reply.error()
+        if er == QtNetwork.QNetworkReply.NetworkError.NoError:
+
+            bytes_string = reply.readAll()
+            response = str(bytes_string, 'utf-8')
+            response_json = json.loads(response)
+            list_municipios = []
+
+            try:
+                municipios = response_json['consulta_municipieroResult']['municipiero']['muni']
+                for municipio in municipios:
+                    codigo_provincia = str(municipio['locat']['cd']).zfill(2)
+                    codigo_municipio = str(municipio['locat']['cmc']).zfill(3)
+                    codigo = codigo_provincia + codigo_municipio
+                    list_municipios.append(codigo + ' - ' + municipio['nm'])
+            except:
+                pass
+
+            self.dlg.comboMunicipi.clear()
+            self.dlg.comboMunicipi.addItems(list_municipios)
+    
     def on_click_Inici(self):
         global provincia
         global municipi
@@ -633,6 +702,8 @@ class NewCCUDB:
             QMessageBox.warning(None, "Error", "Selecciona una entitat")
             self.dlg.setEnabled(True)
             return
+        
+        CODI_MUNICIPI = municipi.split(" - ")[0]
 
         self.dlg.setEnabled(False)
         
@@ -676,7 +747,7 @@ class NewCCUDB:
                 self.dlg.progressBar.setValue(55)
                 QApplication.processEvents()
             if insert == True:
-                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.CP.08120.cadastralparcel")[0]
+                layer = QgsProject.instance().mapLayersByName(f"A.ES.SDGC.CP.{CODI_MUNICIPI}.cadastralparcel")[0]
                 self.insertar_dades(layer, "parcel")
                 self.dlg.progressBar.setValue(60)
                 QApplication.processEvents()
@@ -686,7 +757,7 @@ class NewCCUDB:
                 self.dlg.progressBar.setValue(65)
                 QApplication.processEvents()
             if insert == True:
-                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.CP.08120.cadastralzoning")[0]
+                layer = QgsProject.instance().mapLayersByName(f"A.ES.SDGC.CP.{CODI_MUNICIPI}.cadastralzoning")[0]
                 self.insertar_dades(layer, "zone")
                 self.dlg.progressBar.setValue(70)
                 QApplication.processEvents()
@@ -696,7 +767,7 @@ class NewCCUDB:
                 self.dlg.progressBar.setValue(75)
                 QApplication.processEvents()
             if insert == True:
-                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.AD.08120_Address")[0]
+                layer = QgsProject.instance().mapLayersByName(f"A.ES.SDGC.AD.{CODI_MUNICIPI}_Address")[0]
                 self.insertar_dades(layer, "address")
                 self.dlg.progressBar.setValue(80)
                 QApplication.processEvents()
@@ -706,7 +777,7 @@ class NewCCUDB:
                 self.dlg.progressBar.setValue(85)
                 QApplication.processEvents()
             if insert == True:
-                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.BU.08120.building")[0]
+                layer = QgsProject.instance().mapLayersByName(f"A.ES.SDGC.BU.{CODI_MUNICIPI}.building")[0]
                 self.insertar_dades(layer, "building")
                 self.dlg.progressBar.setValue(90)
                 QApplication.processEvents()
@@ -716,7 +787,7 @@ class NewCCUDB:
                 self.dlg.progressBar.setValue(95)
                 QApplication.processEvents()
             if insert == True:
-                layer = QgsProject.instance().mapLayersByName("A.ES.SDGC.AD.08120_ThoroughfareName")[0]
+                layer = QgsProject.instance().mapLayersByName(f"A.ES.SDGC.AD.{CODI_MUNICIPI}_ThoroughfareName")[0]
                 self.insertar_dades(layer, "thoroughfare")
                 self.dlg.progressBar.setValue(100)
                 QApplication.processEvents()
@@ -740,10 +811,15 @@ class NewCCUDB:
         self.dlg.show()
         conn = self.getConnections()
         self.populateComboBox(self.dlg.comboBD, conn, "Selecciona connexió", True)
-        self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
-        self.populateComboBox(self.dlg.comboMunicipi, 
-                         ["08120 - MATARO", "08186 - SABADELL", "08279 - TERRASSA"],
-                         "Selecciona un municipi", True)
+        #self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
+        #self.populateComboBox(self.dlg.comboMunicipi, 
+        #                 ["08120 - MATARO", "08186 - SABADELL", "08279 - TERRASSA"],
+        #                 "Selecciona un municipi", True)
+
+        self.obtener_provincias()
+
         result = self.dlg.exec_()
         if result:
             pass
+
+    

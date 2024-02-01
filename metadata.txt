@@ -6,7 +6,7 @@
 name=New CCU DB
 qgisMinimumVersion=3.0
 description=Plugin per a la nova creació de la base de dades del CCU
-version=Q3.240131
+version=Q3.240201
 author=CCU - Miquel Rodríguez Juvany
 email=miquel.rodriguezj@tecnocampus.cat
 
