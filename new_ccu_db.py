@@ -375,7 +375,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS parcel CASCADE;
             CREATE TABLE parcel (
                 id_parcel SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(Polygon, 25831),
+                geom geometry(MultiPolygon, 25831),
                 cadastral_reference VARCHAR,
                 area_value FLOAT
             );
@@ -400,7 +400,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS address CASCADE;
             CREATE TABLE address (
                 id_address SERIAL PRIMARY KEY NOT NULL,
-                geom geometry,
+                geom geometry(Point, 25831),
                 cadastral_reference VARCHAR,
                 designator VARCHAR,
                 local_designator VARCHAR
@@ -413,7 +413,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS building CASCADE;
             CREATE TABLE building (
                 id_building SERIAL PRIMARY KEY NOT NULL,
-                geom geometry,
+                geom geometry(Polygon, 25831),
                 cadastral_reference VARCHAR,
                 current_use VARCHAR,
                 area_value FLOAT,
@@ -499,6 +499,21 @@ class NewCCUDB:
                 QApplication.processEvents()
             conn.commit()
         if tabla_postgresql == "building":
+            alg_params = {
+                'INPUT' : layer, 
+                'METHOD' : 1, 
+                'OUTPUT' : 'TEMPORARY_OUTPUT'
+            }
+            result = processing.run('native:fixgeometries', alg_params)
+            layer = result['OUTPUT']
+            alg_params = {
+                "FIELD": ["gml_id"],
+                "INPUT": layer,
+                "OUTPUT": "TEMPORARY_OUTPUT",
+                "SEPARATE_DISJOINT": False
+            }
+            result = processing.run("native:dissolve", alg_params)
+            layer = result["OUTPUT"]
             for feature in layer.getFeatures():
                 if feature["conditionOfConstruction"] != "-":
                     geom = feature.geometry().asWkt()
