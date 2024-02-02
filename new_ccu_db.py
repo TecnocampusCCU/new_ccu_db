@@ -46,7 +46,8 @@ from .resources import *
 from .new_ccu_db_dialog import NewCCUDBDialog
 import os.path
 
-Versio_modul = "Q3.240201"
+Versio_modul = "Q3.240202"
+TEMPORARY_PATH = ""
 
 create = False
 drop = False
@@ -269,6 +270,7 @@ class NewCCUDB:
     
     def estatInicial(self):
         global Versio_modul
+        global TEMPORARY_PATH
         self.dlg.versio.setText(Versio_modul)
         self.dlg.checkCreate.setChecked(False)
         self.dlg.checkDrop.setChecked(False)
@@ -277,6 +279,11 @@ class NewCCUDB:
         self.dlg.progressBar.setValue(0)
         #self.provincies()
         #self.municipis()
+        if os.name=='nt':
+            TEMPORARY_PATH = os.environ['TMP']
+        else:
+            TEMPORARY_PATH = os.environ['TMPDIR']
+
 
     def provincies(self):
         self.populateComboBox(self.dlg.comboProvincia, ["08 - BARCELONA"], "Selecciona una província", True)
@@ -317,7 +324,7 @@ class NewCCUDB:
 
         if response.status_code == 200:
 
-            extracted_dir = os.path.join(self.plugin_dir, "extracted_files")
+            extracted_dir = os.path.join(TEMPORARY_PATH, "extracted_files")
             os.makedirs(extracted_dir, exist_ok=True)
 
             
@@ -337,7 +344,7 @@ class NewCCUDB:
             print(f"Error al descargar el archivo. Código de estado: {response.status_code}")
 
     def carregar_mapa(self):
-        directory = os.path.join(self.plugin_dir, "extracted_files")
+        directory = os.path.join(TEMPORARY_PATH, "extracted_files")
         group_name = municipi
         project = QgsProject.instance()
         tree_root = project.layerTreeRoot()
@@ -413,7 +420,7 @@ class NewCCUDB:
             DROP TABLE IF EXISTS building CASCADE;
             CREATE TABLE building (
                 id_building SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(Polygon, 25831),
+                geom geometry(MultiPolygon, 25831),
                 cadastral_reference VARCHAR,
                 current_use VARCHAR,
                 area_value FLOAT,
@@ -501,18 +508,9 @@ class NewCCUDB:
         if tabla_postgresql == "building":
             alg_params = {
                 'INPUT' : layer, 
-                'METHOD' : 1, 
                 'OUTPUT' : 'TEMPORARY_OUTPUT'
             }
-            result = processing.run('native:fixgeometries', alg_params)
-            layer = result['OUTPUT']
-            alg_params = {
-                "FIELD": ["gml_id"],
-                "INPUT": layer,
-                "OUTPUT": "TEMPORARY_OUTPUT",
-                "SEPARATE_DISJOINT": False
-            }
-            result = processing.run("native:dissolve", alg_params)
+            result = processing.run('native:promotetomulti', alg_params)
             layer = result["OUTPUT"]
             for feature in layer.getFeatures():
                 if feature["conditionOfConstruction"] != "-":
@@ -673,6 +671,91 @@ class NewCCUDB:
 
             self.dlg.comboMunicipi.clear()
             self.dlg.comboMunicipi.addItems(list_municipios)
+
+    def carregar_taules_postgresql(self):
+        global cursor
+        global conn
+        global uri
+        global host1
+        global port1
+        global nomBD1
+        global user1
+        global password1
+
+        # vull obtenir les taules de la base de dades, depenent de quines hagi seleccionat, i carregar-les al projecte qgis
+        if parcel:
+            try:
+                uri.setDataSource("public", "parcel", 'geom')
+                vlayer = QgsVectorLayer(uri.uri(), "parcel", "postgres")
+                QgsProject.instance().addMapLayer(vlayer)
+            except Exception as ex:
+                print ("Error a carregar capes al mapa")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error a carregar capes al mapa")
+                conn.rollback()
+                return
+            QApplication.processEvents()
+        if zone:
+            try:
+                uri.setDataSource("public", "zone", 'geom')
+                vlayer = QgsVectorLayer(uri.uri(), "zone", "postgres")
+                QgsProject.instance().addMapLayer(vlayer)
+            except Exception as ex:
+                print ("Error a carregar capes al mapa")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error a carregar capes al mapa")
+                conn.rollback()
+                return
+            QApplication.processEvents()
+        if address:
+            try:
+                uri.setDataSource("public", "address", 'geom')
+                vlayer = QgsVectorLayer(uri.uri(), "address", "postgres")
+                QgsProject.instance().addMapLayer(vlayer)
+            except Exception as ex:
+                print ("Error a carregar capes al mapa")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error a carregar capes al mapa")
+                conn.rollback()
+                return
+            QApplication.processEvents()
+        if building:
+            try:
+                uri.setDataSource("public", "building", 'geom')
+                vlayer = QgsVectorLayer(uri.uri(), "building", "postgres")
+                QgsProject.instance().addMapLayer(vlayer)
+            except Exception as ex:
+                print ("Error a carregar capes al mapa")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error a carregar capes al mapa")
+                conn.rollback()
+                return
+            QApplication.processEvents()
+        if thoroughfare:
+            try:
+                uri.setDataSource("public", "thoroughfare", '')
+                vlayer = QgsVectorLayer(uri.uri(), "thoroughfare", "postgres")
+                QgsProject.instance().addMapLayer(vlayer)
+            except Exception as ex:
+                print ("Error a carregar capes al mapa")
+                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+                message = template.format(type(ex).__name__, ex.args)
+                print (message)
+                QMessageBox.critical(None, "Error", "Error a carregar capes al mapa")
+                conn.rollback()
+                return
+            QApplication.processEvents()
+
+        
+        
     
     def on_click_Inici(self):
         global provincia
@@ -806,6 +889,8 @@ class NewCCUDB:
                 self.insertar_dades(layer, "thoroughfare")
                 self.dlg.progressBar.setValue(100)
                 QApplication.processEvents()
+        self.carregar_taules_postgresql()
+        QApplication.processEvents()
 
         self.dlg.progressBar.setValue(100)
         QApplication.processEvents()
