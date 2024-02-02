@@ -48,6 +48,7 @@ import os.path
 
 Versio_modul = "Q3.240202"
 TEMPORARY_PATH = ""
+CRS = ""
 
 create = False
 drop = False
@@ -344,6 +345,7 @@ class NewCCUDB:
             print(f"Error al descargar el archivo. Código de estado: {response.status_code}")
 
     def carregar_mapa(self):
+        global CRS
         directory = os.path.join(TEMPORARY_PATH, "extracted_files")
         group_name = municipi
         project = QgsProject.instance()
@@ -358,6 +360,8 @@ class NewCCUDB:
                         address_path = layer_path + "|layername=Address"
                         address_file_name = file_name + "_Address"
                         gml_layer = QgsVectorLayer(address_path, address_file_name, "ogr")
+                        if CRS == "":
+                            CRS = gml_layer.crs().authid().split(":")[-1]
                         project.addMapLayer(gml_layer, False)
                         layers_group.addLayer(gml_layer)
                         print("Capa address o thoroughfarename cargada: " + file_name)
@@ -370,19 +374,22 @@ class NewCCUDB:
                         print("Capa address o thoroughfarename cargada: " + file_name)
                 else:
                     gml_layer = QgsVectorLayer(layer_path, file_name, "ogr")
+                    if CRS == "":
+                        CRS = gml_layer.crs().authid().split(":")[-1]
                     project.addMapLayer(gml_layer, False)
                     layers_group.addLayer(gml_layer)
-                    print("Capa cargada: " + file_name)
+                    print("Capa cargada: " + file_name + " amb CRS: " + str(CRS))
         
         print("Totes les capes carregades")
 
     def create_table(self, tabla_postgresql):
+        global CRS
         if tabla_postgresql == "parcel":
-            sql = """
+            sql = f"""
             DROP TABLE IF EXISTS parcel CASCADE;
             CREATE TABLE parcel (
                 id_parcel SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(MultiPolygon, 25831),
+                geom geometry(MultiPolygon, '{CRS}'),
                 cadastral_reference VARCHAR,
                 area_value FLOAT
             );
@@ -390,11 +397,11 @@ class NewCCUDB:
             cursor.execute(sql)
             conn.commit()
         if tabla_postgresql == "zone":
-            sql = """
+            sql = f"""
             DROP TABLE IF EXISTS zone CASCADE;
             CREATE TABLE zone (
                 id_zone SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(MultiPolygon, 25831),
+                geom geometry(MultiPolygon, '{CRS}'),
                 cadastral_zoning_reference VARCHAR,
                 type VARCHAR,
                 local_reference VARCHAR
@@ -403,11 +410,11 @@ class NewCCUDB:
             cursor.execute(sql)
             conn.commit()
         if tabla_postgresql == "address":
-            sql = """
+            sql = f"""
             DROP TABLE IF EXISTS address CASCADE;
             CREATE TABLE address (
                 id_address SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(Point, 25831),
+                geom geometry(Point, '{CRS}'),
                 cadastral_reference VARCHAR,
                 designator VARCHAR,
                 local_designator VARCHAR
@@ -416,11 +423,11 @@ class NewCCUDB:
             cursor.execute(sql)
             conn.commit()
         if tabla_postgresql == "building":
-            sql = """
+            sql = f"""
             DROP TABLE IF EXISTS building CASCADE;
             CREATE TABLE building (
                 id_building SERIAL PRIMARY KEY NOT NULL,
-                geom geometry(MultiPolygon, 25831),
+                geom geometry(MultiPolygon, '{CRS}'),
                 cadastral_reference VARCHAR,
                 current_use VARCHAR,
                 area_value FLOAT,
@@ -460,7 +467,7 @@ class NewCCUDB:
                 cadastral_reference = feature["nationalCadastralReference"]
                 area_value = feature["areaValue"]
 
-                sql = f"INSERT INTO parcel (geom, cadastral_reference, area_value) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', {area_value})"
+                sql = f"INSERT INTO parcel (geom, cadastral_reference, area_value) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_reference}', {area_value})"
                 cursor.execute(sql)
             conn.commit()
         if tabla_postgresql == "zone":
@@ -485,7 +492,7 @@ class NewCCUDB:
                 cadastral_zoning_reference = feature["nationalCadastalZoningReference"]
                 type = feature["localisedCharacterString"]
 
-                sql = f"INSERT INTO zone (geom, cadastral_zoning_reference, type) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_zoning_reference}', '{type}')"
+                sql = f"INSERT INTO zone (geom, cadastral_zoning_reference, type) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_zoning_reference}', '{type}')"
                 cursor.execute(sql)
             conn.commit()
         if tabla_postgresql == "address":
@@ -501,7 +508,7 @@ class NewCCUDB:
                 if len(designator) == 8:
                     designator = designator + "x"
 
-                sql = f"INSERT INTO address (geom, cadastral_reference, designator) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', '{designator}')"
+                sql = f"INSERT INTO address (geom, cadastral_reference, designator) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_reference}', '{designator}')"
                 cursor.execute(sql)
                 QApplication.processEvents()
             conn.commit()
@@ -522,7 +529,7 @@ class NewCCUDB:
                     date_of_construction = feature["beginning"]
                     date_of_last_update = feature["end"]
 
-                    sql = f"INSERT INTO building (geom, cadastral_reference, current_use, area_value, number_of_floors_above_ground, date_of_construction, date_of_last_update) VALUES (ST_GeomFromText('{geom}', 25831), '{cadastral_reference}', '{current_use}', {area_value}, {number_of_floors_above_ground}, '{date_of_construction}', '{date_of_last_update}')"
+                    sql = f"INSERT INTO building (geom, cadastral_reference, current_use, area_value, number_of_floors_above_ground, date_of_construction, date_of_last_update) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_reference}', '{current_use}', {area_value}, {number_of_floors_above_ground}, '{date_of_construction}', '{date_of_last_update}')"
                     cursor.execute(sql)
                 conn.commit()
         if tabla_postgresql == "thoroughfare":
@@ -754,9 +761,6 @@ class NewCCUDB:
                 return
             QApplication.processEvents()
 
-        
-        
-    
     def on_click_Inici(self):
         global provincia
         global municipi
@@ -774,6 +778,8 @@ class NewCCUDB:
         global nomBD1
         global user1
         global password1
+
+        global CRS
 
         uri = QgsDataSourceUri()
         try:
