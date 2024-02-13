@@ -327,8 +327,17 @@ class NewCCUDB:
 
             extracted_dir = os.path.join(TEMPORARY_PATH, "extracted_files")
             os.makedirs(extracted_dir, exist_ok=True)
-
             
+            #for file in os.listdir(extracted_dir):
+            #    file_path = os.path.join(extracted_dir, file)
+            #    try:
+            #        if os.path.isfile(file_path):
+            #            os.remove(file_path)
+            #        elif os.path.isdir(file_path):
+            #            pass
+            #    except Exception as e:
+            #        print('Failed to delete %s. Reason: %s' % (file_path, e))
+
             zip_file = zipfile.ZipFile(BytesIO(response.content))
 
             zip_file.extractall(extracted_dir)
@@ -417,7 +426,8 @@ class NewCCUDB:
                 geom geometry(Point, '{CRS}'),
                 cadastral_reference VARCHAR,
                 designator VARCHAR,
-                local_designator VARCHAR
+                local_designator VARCHAR,
+                x_designator VARCHAR UNIQUE NOT NULL
             );
             """
             cursor.execute(sql)
@@ -507,8 +517,10 @@ class NewCCUDB:
                 designator = str(street) + str(number)
                 if len(designator) == 8:
                     designator = designator + "x"
+                
+                x_designator = designator + cadastral_reference
 
-                sql = f"INSERT INTO address (geom, cadastral_reference, designator) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_reference}', '{designator}')"
+                sql = f"INSERT INTO address (geom, cadastral_reference, designator, x_designator) VALUES (ST_GeomFromText('{geom}', '{CRS}'), '{cadastral_reference}', '{designator}', '{x_designator}') ON CONFLICT (x_designator) DO NOTHING"
                 cursor.execute(sql)
                 QApplication.processEvents()
             conn.commit()
